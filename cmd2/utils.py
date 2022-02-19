@@ -23,6 +23,7 @@ from typing import (
     Iterable,
     List,
     Optional,
+    Set,
     TextIO,
     Type,
     TypeVar,
@@ -737,6 +738,71 @@ class RedirectionSavedState:
         self.saved_redirecting = saved_redirecting
 
 
+def _update_previous_styles(line_styles: Dict[int, str], previous_styles: List[str]) -> List[str]:
+    """
+    This is a utility function for align_text() which updates the list of styles
+    from previous lines which are still in effect.
+
+    :param line_styles: styles used in the current line of text.
+    :param previous_styles: list of styles from previous lines that needs to be updated based on whether
+                            anything in the current line overrides them.
+    :return: an updated list of styles that are still be in effect.
+    """
+    from . import (
+        ansi,
+    )
+
+    # Return value
+    updated_previous_styles = previous_styles.copy()
+
+    # Used to quickly find intersections between the current line's and previous line's styles
+    line_styles_set = set(line_styles.values())
+
+    # Check if all previous styles have been overridden by the current line
+    style_resets = {str(ansi.TextStyle.RESET_ALL), str(ansi.TextStyle.ALT_RESET_ALL)}
+    if line_styles_set.intersection(style_resets):
+        updated_previous_styles.clear()
+
+    else:
+
+        def remove_overridden(to_find: Set[str]) -> None:
+            """
+            Remove any previous styles that have been overridden by styles in the current line
+            :param to_find: if any of these styles are found in the current line, then they will be
+                            removed from the previous style list.
+            """
+            nonlocal updated_previous_styles
+            if line_styles_set.intersection(to_find):
+                updated_previous_styles = [s for s in updated_previous_styles if s not in to_find]
+
+        remove_overridden(
+            {str(ansi.TextStyle.INTENSITY_BOLD), str(ansi.TextStyle.INTENSITY_DIM), str(ansi.TextStyle.INTENSITY_NORMAL)}
+        )
+        remove_overridden({str(ansi.TextStyle.ITALIC_ENABLE), str(ansi.TextStyle.ITALIC_DISABLE)})
+        remove_overridden({str(ansi.TextStyle.OVERLINE_ENABLE), str(ansi.TextStyle.OVERLINE_DISABLE)})
+        remove_overridden({str(ansi.TextStyle.STRIKETHROUGH_ENABLE), str(ansi.TextStyle.STRIKETHROUGH_DISABLE)})
+        remove_overridden({str(ansi.TextStyle.UNDERLINE_ENABLE), str(ansi.TextStyle.UNDERLINE_DISABLE)})
+
+        # Remove overridden standard colors
+        line_styles_str = ''.join(line_styles_set)
+        if ansi.STD_FG_RE.search(line_styles_str):
+            updated_previous_styles = [s for s in updated_previous_styles if not ansi.STD_FG_RE.match(s)]
+        if ansi.STD_BG_RE.search(line_styles_str):
+            updated_previous_styles = [s for s in updated_previous_styles if not ansi.STD_BG_RE.match(s)]
+
+        # Remove overridden eight-bit colors
+
+    # TODO: Remove overridden styles from line_styles.
+    # TODO: Read line_styles from beginning. Keep a structure that catalogs each type of style found and its value.
+    # TODO: Each time we find a particular category, remove any previous one from the list and append the new one.
+    # TODO: If a style type is not recognized, then just append it to the list.
+
+    # Include the current line's style in the previous styles list
+    updated_previous_styles.extend(line_styles.values())
+
+    return updated_previous_styles
+
+
 class TextAlignment(Enum):
     """Horizontal text alignment"""
 
@@ -801,7 +867,7 @@ def align_text(
         raise (ValueError("Fill character is an unprintable character"))
 
     # Isolate the style chars before and after the fill character. We will use them when building sequences of
-    # of fill characters. Instead of repeating the style characters for each fill character, we'll wrap each sequence.
+    # fill characters. Instead of repeating the style characters for each fill character, we'll wrap each sequence.
     fill_char_style_begin, fill_char_style_end = fill_char.split(stripped_fill_char)
 
     if text:
@@ -812,9 +878,9 @@ def align_text(
     text_buf = io.StringIO()
 
     # ANSI style sequences that may affect future lines will be cancelled by the fill_char's style.
-    # To avoid this, we save the state of a line's style so we can restore it when beginning the next line.
+    # To avoid this, we save the style state so we can restore it when beginning the next line.
     # This also allows the lines to be used independently and still have their style. TableCreator does this.
-    aggregate_styles = ''
+    previous_styles: List[str] = []
 
     for index, line in enumerate(lines):
         if index > 0:
@@ -858,7 +924,7 @@ def align_text(
         right_fill += ' ' * (right_fill_width - ansi.style_aware_wcswidth(right_fill))
 
         # Don't allow styles in fill characters and text to affect one another
-        if fill_char_style_begin or fill_char_style_end or aggregate_styles or line_styles:
+        if fill_char_style_begin or fill_char_style_end or previous_styles or line_styles:
             if left_fill:
                 left_fill = ansi.TextStyle.RESET_ALL + fill_char_style_begin + left_fill + fill_char_style_end
             left_fill += ansi.TextStyle.RESET_ALL
@@ -868,10 +934,10 @@ def align_text(
             right_fill += ansi.TextStyle.RESET_ALL
 
         # Write the line and restore any styles from previous lines
-        text_buf.write(left_fill + aggregate_styles + line + right_fill)
+        text_buf.write(left_fill + ''.join(previous_styles) + line + right_fill)
 
-        # Update the aggregate with styles in this line
-        aggregate_styles += ''.join(line_styles.values())
+        # Remove any overridden styles from previous_styles
+        previous_styles = _update_previous_styles(line_styles, previous_styles)
 
     return text_buf.getvalue()
 

@@ -391,7 +391,7 @@ class TableCreator:
         :param col: Column definition for this cell
         :param fill_char: character that fills remaining space in a cell. If your text has a background color,
                           then give fill_char the same background color. (Cannot be a line breaking character)
-        :return: Tuple of cell lines deque and the display width of the cell
+        :return: Tuple(deque of cell lines, display width of the cell)
         """
         # Convert data to string and replace tabs with spaces
         data_str = str(cell_data).replace('\t', SPACE * self.tab_width)
@@ -411,8 +411,10 @@ class TableCreator:
 
         aligned_text = utils.align_text(wrapped_text, fill_char=fill_char, width=col.width, alignment=text_alignment)
 
-        lines = deque(aligned_text.splitlines())
+        # Calculate cell_width first to avoid having 2 copies of aligned_text.splitlines() in memory
         cell_width = ansi.widest_line(aligned_text)
+        lines = deque(aligned_text.splitlines())
+
         return lines, cell_width
 
     def generate_row(
